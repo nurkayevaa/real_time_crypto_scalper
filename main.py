@@ -16,7 +16,8 @@ qty = 1
 df = yf.download(symbol, period="1y", interval="1d")
 df["SMA50"] = df["Close"].rolling(50).mean()
 df["SMA200"] = df["Close"].rolling(200).mean()
-df["RSI"] = ta.momentum.RSIIndicator(df["Close"], window=14).rsi()
+df["RSI"] = ta.momentum.RSIIndicator(df["Close"].squeeze(), window=14).rsi()
+
 
 latest = df.iloc[-1]
 print(latest[["Close", "SMA50", "SMA200", "RSI"]])
