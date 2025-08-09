@@ -13,12 +13,18 @@ client = TradingClient(API_KEY, API_SECRET, paper=True)
 symbol = "AAPL"
 qty = 1
 
-# Download historical data with auto_adjust to get adjusted close prices
+# Force auto_adjust to avoid dividend/split adjustments later
 df = yf.download(symbol, period="1y", interval="1d", auto_adjust=True)
 
 df["SMA50"] = df["Close"].rolling(50).mean()
 df["SMA200"] = df["Close"].rolling(200).mean()
-df["RSI"] = ta.momentum.RSIIndicator(df["Close"].squeeze(), window=14).rsi()
+
+# Ensure Close is 1D Series
+close_series = df["Close"]
+if hasattr(close_series, "to_numpy") and close_series.ndim > 1:
+    close_series = close_series.squeeze()
+
+df["RSI"] = ta.momentum.RSIIndicator(close_series, window=14).rsi()
 
 latest = df.iloc[-1]
 print(latest[["Close", "SMA50", "SMA200", "RSI"]])
