@@ -24,7 +24,7 @@ trading_client = TradingClient(
 )
 
 
-symbol = "MSFT"
+symbol = "TSLA"
 qty = 1
 
 # Get last year of daily bars from IEX feed
