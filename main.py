@@ -14,9 +14,17 @@ API_SECRET = os.getenv("APCA_API_SECRET_KEY")
 
 # Alpaca clients
 data_client = StockHistoricalDataClient(API_KEY, API_SECRET)
-trading_client = TradingClient(API_KEY, API_SECRET, paper=True)
 
-symbol = "AAPL"
+
+trading_client = TradingClient(
+    API_KEY,
+    API_SECRET,
+    paper=True,
+    base_url=URL("https://paper-api.alpaca.markets/v2")
+)
+
+
+symbol = "MSFT"
 qty = 1
 
 # Get last year of daily bars from IEX feed
