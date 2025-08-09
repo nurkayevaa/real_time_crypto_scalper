@@ -20,7 +20,7 @@ trading_client = TradingClient(
     API_KEY,
     API_SECRET,
     paper=True,
-    base_url=URL("https://paper-api.alpaca.markets/v2")
+   # base_url=URL("https://paper-api.alpaca.markets/v2")
 )
 
 
