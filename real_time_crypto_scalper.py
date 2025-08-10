@@ -40,9 +40,11 @@ TAKE_PROFIT_PCT = 0.02
 bars_buffer = {}
 close_history = defaultdict(lambda: deque(maxlen=5000))
 
+
 def round_price(price, decimals=4):
     d = Decimal(str(price))
-    return float(d.quantize(Decimal('1.' + '0'*decimals), rounding=ROUND_DOWN))
+    return float(d.quantize(Decimal('1.' + '0' * decimals), rounding=ROUND_DOWN))
+
 
 def compute_rsi_from_deque(deq, period=14):
     if len(deq) < period + 1:
@@ -50,16 +52,18 @@ def compute_rsi_from_deque(deq, period=14):
     s = pd.Series(list(deq))
     return ta.momentum.RSIIndicator(s, window=period).rsi().iloc[-1]
 
-async def on_trade_msg(trade):
+
+async def handle_trade(trade):
     symbol = trade.symbol
     price = float(trade.price)
-    ts = trade.timestamp
+    ts = trade.timestamp  # aware datetime
 
     minute = ts.replace(second=0, microsecond=0)
     key = (symbol, minute)
 
     buf = bars_buffer.get(key)
     if buf is None:
+        # New bar
         buf = {
             "open": price,
             "high": price,
@@ -71,14 +75,16 @@ async def on_trade_msg(trade):
         }
         bars_buffer[key] = buf
     else:
+        # Update existing bar
         buf["high"] = max(buf["high"], price)
         buf["low"] = min(buf["low"], price)
         buf["close"] = price
         buf["volume"] += float(getattr(trade, "size", 0.0))
 
-    await flush_old_buckets(symbol, current_minute=minute)
+    await flush_old_bars(symbol, current_minute=minute)
 
-async def flush_old_buckets(symbol, current_minute):
+
+async def flush_old_bars(symbol, current_minute):
     old_keys = [k for k in bars_buffer if k[0] == symbol and k[1] < current_minute]
     for key in sorted(old_keys):
         buf = bars_buffer.pop(key)
@@ -99,14 +105,13 @@ async def flush_old_buckets(symbol, current_minute):
         try:
             if rsi < BUY_THRESHOLD:
                 print(f"BUY signal for {symbol} (RSI {rsi:.2f}) - submitting bracket order")
-                entry_side = OrderSide.BUY
                 sl_price = round_price(close * (1 - STOP_LOSS_PCT))
                 tp_price = round_price(close * (1 + TAKE_PROFIT_PCT))
 
                 order = MarketOrderRequest(
                     symbol=symbol,
                     qty=qty,
-                    side=entry_side,
+                    side=OrderSide.BUY,
                     time_in_force=TimeInForce.GTC,
                     order_class="bracket",
                     take_profit=dict(limit_price=str(tp_price)),
@@ -116,14 +121,13 @@ async def flush_old_buckets(symbol, current_minute):
 
             elif rsi > SELL_THRESHOLD:
                 print(f"SELL signal for {symbol} (RSI {rsi:.2f}) - submitting bracket order")
-                entry_side = OrderSide.SELL
                 sl_price = round_price(close * (1 + STOP_LOSS_PCT))
                 tp_price = round_price(close * (1 - TAKE_PROFIT_PCT))
 
                 order = MarketOrderRequest(
                     symbol=symbol,
                     qty=qty,
-                    side=entry_side,
+                    side=OrderSide.SELL,
                     time_in_force=TimeInForce.GTC,
                     order_class="bracket",
                     take_profit=dict(limit_price=str(tp_price)),
@@ -134,12 +138,17 @@ async def flush_old_buckets(symbol, current_minute):
         except Exception as e:
             print(f"Order submission failed: {e}")
 
+
 async def main():
     stream = CryptoDataStream(API_KEY, API_SECRET)
+
+    # Subscribe to trade updates for each symbol
     for sym in SYMBOLS:
-        stream.subscribe_trades(on_trade_msg, sym)
+        stream.subscribe_trades(handle_trade, sym)
+
     print("Starting real-time crypto scalper stream... (Ctrl+C to stop)")
     await stream.run()
+
 
 if __name__ == "__main__":
     try:
