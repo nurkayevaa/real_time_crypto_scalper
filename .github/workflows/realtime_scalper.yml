@@ -1,7 +1,7 @@
 name: Alpaca RSI+MA Bot (Real-Time Crypto Scalper)
 
 on:
-  workflow_dispatch:  # manual trigger from GitHub UI
+  workflow_dispatch:
 
 jobs:
   run-bot:
@@ -17,11 +17,8 @@ jobs:
 
       - name: Install dependencies
         run: |
+          pip install --upgrade pip
           pip install -r requirements.txt
-          pip install alpha_vantage
-
-      - name: Check installed packages
-        run: pip list
 
       - name: Run real-time crypto scalper bot
         env:

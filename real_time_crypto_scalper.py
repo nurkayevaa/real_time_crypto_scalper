@@ -1,11 +1,7 @@
 """
-real_time_crypto_scalper.py
-
-- Uses alpaca-trade-api Stream to subscribe to crypto trades.
-- Aggregates trades into 1-minute bars in memory.
-- Calculates RSI(14) on 1-min closes and submits bracket market orders on thresholds.
-- Includes stop-loss and take-profit orders for risk management.
-- Designed for PAPER trading only (easy to flip to live later).
+Real-time crypto scalper using alpaca-py for streaming and trading.
+Calculates RSI(14) on 1-min bars and submits bracket orders on signals.
+Designed for paper trading.
 """
 
 import os
@@ -16,71 +12,54 @@ from decimal import Decimal, ROUND_DOWN
 
 import pandas as pd
 import ta
-from alpaca_trade_api.stream import Stream
+
+from alpaca.data.live import CryptoDataStream
 from alpaca.trading.client import TradingClient
 from alpaca.trading.requests import MarketOrderRequest
 from alpaca.trading.enums import OrderSide, TimeInForce
-
-# --- Config ---
 
 API_KEY = os.getenv("APCA_API_KEY_ID")
 API_SECRET = os.getenv("APCA_API_SECRET_KEY")
 
 trading_client = TradingClient(API_KEY, API_SECRET, paper=True)
 
-# Symbols to watch — Alpaca crypto pair format
 SYMBOLS = ["BTC/USD", "ETH/USD"]
 
-# RSI parameters
 RSI_PERIOD = 14
 BUY_THRESHOLD = 30.0
 SELL_THRESHOLD = 70.0
 
-# Order sizes (adjust as needed)
 ORDER_QTY = {
     "BTC/USD": 0.001,
     "ETH/USD": 0.01,
 }
 
-# Stop-loss and take-profit percentages (e.g., 1% SL, 2% TP)
 STOP_LOSS_PCT = 0.01
 TAKE_PROFIT_PCT = 0.02
 
-# In-memory bar buffers and close history per symbol
 bars_buffer = {}
 close_history = defaultdict(lambda: deque(maxlen=5000))
 
-
 def round_price(price, decimals=4):
-    """Round price down to specific decimals for order price precision."""
     d = Decimal(str(price))
     return float(d.quantize(Decimal('1.' + '0'*decimals), rounding=ROUND_DOWN))
 
-
 def compute_rsi_from_deque(deq, period=14):
-    """Compute RSI from a deque of close prices using `ta` library."""
     if len(deq) < period + 1:
         return None
     s = pd.Series(list(deq))
     return ta.momentum.RSIIndicator(s, window=period).rsi().iloc[-1]
 
-
 async def on_trade_msg(trade):
-    """
-    Called on every new trade tick from Alpaca Stream.
-    Aggregates trade into 1-minute OHLCV bars.
-    """
     symbol = trade.symbol
     price = float(trade.price)
-    ts = trade.timestamp  # aware datetime
+    ts = trade.timestamp
 
-    # Align trade timestamp to minute bucket (floor seconds, microseconds)
     minute = ts.replace(second=0, microsecond=0)
     key = (symbol, minute)
 
     buf = bars_buffer.get(key)
     if buf is None:
-        # New 1-min bar
         buf = {
             "open": price,
             "high": price,
@@ -92,23 +71,15 @@ async def on_trade_msg(trade):
         }
         bars_buffer[key] = buf
     else:
-        # Update existing bar
         buf["high"] = max(buf["high"], price)
         buf["low"] = min(buf["low"], price)
         buf["close"] = price
         buf["volume"] += float(getattr(trade, "size", 0.0))
 
-    # Check and flush completed bars for symbol (older than current minute)
     await flush_old_buckets(symbol, current_minute=minute)
 
-
 async def flush_old_buckets(symbol, current_minute):
-    """
-    Finalize and process any 1-min bars for `symbol` older than current_minute.
-    Calculate RSI and place bracket orders on signal.
-    """
     old_keys = [k for k in bars_buffer if k[0] == symbol and k[1] < current_minute]
-
     for key in sorted(old_keys):
         buf = bars_buffer.pop(key)
         close = buf["close"]
@@ -121,14 +92,13 @@ async def flush_old_buckets(symbol, current_minute):
               f"RSI:{rsi if rsi is not None else 'n/a'}")
 
         if rsi is None:
-            continue  # Not enough data yet
+            continue
 
         qty = ORDER_QTY.get(symbol, 0.001)
 
         try:
             if rsi < BUY_THRESHOLD:
                 print(f"BUY signal for {symbol} (RSI {rsi:.2f}) - submitting bracket order")
-
                 entry_side = OrderSide.BUY
                 sl_price = round_price(close * (1 - STOP_LOSS_PCT))
                 tp_price = round_price(close * (1 + TAKE_PROFIT_PCT))
@@ -146,7 +116,6 @@ async def flush_old_buckets(symbol, current_minute):
 
             elif rsi > SELL_THRESHOLD:
                 print(f"SELL signal for {symbol} (RSI {rsi:.2f}) - submitting bracket order")
-
                 entry_side = OrderSide.SELL
                 sl_price = round_price(close * (1 + STOP_LOSS_PCT))
                 tp_price = round_price(close * (1 - TAKE_PROFIT_PCT))
@@ -165,16 +134,12 @@ async def flush_old_buckets(symbol, current_minute):
         except Exception as e:
             print(f"Order submission failed: {e}")
 
-
 async def main():
-    stream = Stream(API_KEY, API_SECRET, data_feed='iex')
-
+    stream = CryptoDataStream(API_KEY, API_SECRET)
     for sym in SYMBOLS:
         stream.subscribe_trades(on_trade_msg, sym)
-
     print("Starting real-time crypto scalper stream... (Ctrl+C to stop)")
-    await stream._run_forever()
-
+    await stream.run()
 
 if __name__ == "__main__":
     try:
