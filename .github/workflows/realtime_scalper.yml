@@ -20,6 +20,9 @@ jobs:
           pip install --upgrade pip
           pip install --upgrade alpaca-trade-api alpha_vantage
           pip install -r requirements.txt
+      - name: Check installed packages
+        run: pip list
+
 
       - name: Run real-time crypto scalper bot
         env:
