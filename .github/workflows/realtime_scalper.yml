@@ -17,14 +17,13 @@ jobs:
 
       - name: Install dependencies
         run: |
-        pip uninstall -y alpha_vantage
-        pip install git+https://github.com/RomelTorres/alpha_vantage.git
-        pip install alpaca-trade-api
-        pip install -r requirements.txt
+          pip uninstall -y alpha_vantage
+          pip install git+https://github.com/RomelTorres/alpha_vantage.git
+          pip install alpaca-trade-api
+          pip install -r requirements.txt
 
       - name: Check installed packages
         run: pip list
-
 
       - name: Run real-time crypto scalper bot
         env:
@@ -33,5 +32,5 @@ jobs:
           RSI_PERIOD: 14
           BUY_THRESHOLD: 30
           SELL_THRESHOLD: 70
-          COOLDOWN_SECONDS: 60  # optional cooldown time between trades per symbol
+          COOLDOWN_SECONDS: 60
         run: python real_time_crypto_scalper.py
