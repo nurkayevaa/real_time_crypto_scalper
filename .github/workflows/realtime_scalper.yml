@@ -17,10 +17,8 @@ jobs:
 
       - name: Install dependencies
         run: |
-          pip uninstall -y alpha_vantage
-          pip install git+https://github.com/RomelTorres/alpha_vantage.git
-          pip install alpaca-trade-api
           pip install -r requirements.txt
+          pip install alpha_vantage
 
       - name: Check installed packages
         run: pip list
