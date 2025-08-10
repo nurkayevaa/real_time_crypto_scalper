@@ -1,7 +1,7 @@
 import os
 from datetime import datetime, timedelta
-from alpaca.data.historical import StockHistoricalDataClient
-from alpaca.data.requests import StockBarsRequest
+from alpaca.data.historical import CryptoHistoricalDataClient
+from alpaca.data.requests import CryptoBarsRequest
 from alpaca.data.timeframe import TimeFrame
 from alpaca.trading.client import TradingClient
 from alpaca.trading.requests import MarketOrderRequest
@@ -13,35 +13,31 @@ API_KEY = os.getenv("APCA_API_KEY_ID")
 API_SECRET = os.getenv("APCA_API_SECRET_KEY")
 
 # Alpaca clients
-data_client = StockHistoricalDataClient(API_KEY, API_SECRET)
+data_client = CryptoHistoricalDataClient()  # crypto data doesn't require API keys
+trading_client = TradingClient(API_KEY, API_SECRET, paper=True)
 
+symbol = "BTC/USD"  # crypto pair
+qty = 0.001         # fractional qty works for crypto
 
-trading_client = TradingClient(
-    API_KEY,
-    API_SECRET,
-    paper=True,
-   # base_url=URL("https://paper-api.alpaca.markets/v2")
-)
-
-
-symbol = "TSLA"
-qty = 1
-
-# Get last year of daily bars from IEX feed
+# Date range for last year of daily bars
 end = datetime.now()
 start = end - timedelta(days=365)
 
-request_params = StockBarsRequest(
+# Get crypto bars
+request_params = CryptoBarsRequest(
     symbol_or_symbols=symbol,
     timeframe=TimeFrame.Day,
     start=start,
-    end=end,
-    feed="iex"  # <<--- IMPORTANT: Use free IEX feed instead of SIP
+    end=end
 )
-bars = data_client.get_stock_bars(request_params)
+bars = data_client.get_crypto_bars(request_params)
 
 # Convert MultiIndex DataFrame to single symbol DataFrame
-df = bars.df[symbol].copy()
+bars_df = bars.df
+if symbol in bars_df.index.get_level_values(0):
+    df = bars_df.loc[symbol].copy()
+else:
+    raise ValueError(f"No data found for {symbol}")
 
 # Technical indicators
 df["SMA50"] = df["close"].rolling(50).mean()
@@ -58,7 +54,7 @@ if latest["RSI"] < 30 and latest["SMA50"] > latest["SMA200"]:
         symbol=symbol,
         qty=qty,
         side=OrderSide.BUY,
-        time_in_force=TimeInForce.DAY
+        time_in_force=TimeInForce.GTC
     )
     trading_client.submit_order(order)
 elif latest["RSI"] > 70 and latest["SMA50"] < latest["SMA200"]:
@@ -67,7 +63,7 @@ elif latest["RSI"] > 70 and latest["SMA50"] < latest["SMA200"]:
         symbol=symbol,
         qty=qty,
         side=OrderSide.SELL,
-        time_in_force=TimeInForce.DAY
+        time_in_force=TimeInForce.GTC
     )
     trading_client.submit_order(order)
 else:
