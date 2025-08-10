@@ -26,7 +26,7 @@ start = end - timedelta(days=365)
 # Get crypto bars
 request_params = CryptoBarsRequest(
     symbol_or_symbols=symbol,
-    timeframe=TimeFrame.Day,
+    timeframe=TimeFrame.Hour,
     start=start,
     end=end
 )
