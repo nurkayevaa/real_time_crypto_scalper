@@ -1,5 +1,5 @@
-alpaca-py
-yfinance
-ta
-alpaca-trade-api
-alpha_vantage
+alpaca-trade-api==3.2.0
+alpha-vantage==3.0.0
+pandas>=2.3.1
+numpy>=2.2.6
+ta>=0.11.0
