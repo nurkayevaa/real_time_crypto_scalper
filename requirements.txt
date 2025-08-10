@@ -2,3 +2,5 @@ alpaca-py
 yfinance
 ta
 alpaca-trade-api
+alpaca-trade-api
+alpha_vantage
