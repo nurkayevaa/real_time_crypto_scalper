@@ -1,15 +1,7 @@
-"""
-Real-time crypto scalper using alpaca-py for streaming and trading.
-Calculates RSI(14) on 1-min bars and submits bracket orders on signals.
-Designed for paper trading.
-"""
-
 import os
 import asyncio
-from datetime import datetime
 from collections import defaultdict, deque
 from decimal import Decimal, ROUND_DOWN
-
 import pandas as pd
 import ta
 
@@ -24,16 +16,10 @@ API_SECRET = os.getenv("APCA_API_SECRET_KEY")
 trading_client = TradingClient(API_KEY, API_SECRET, paper=True)
 
 SYMBOLS = ["BTC/USD", "ETH/USD"]
-
 RSI_PERIOD = 14
 BUY_THRESHOLD = 30.0
 SELL_THRESHOLD = 70.0
-
-ORDER_QTY = {
-    "BTC/USD": 0.001,
-    "ETH/USD": 0.01,
-}
-
+ORDER_QTY = {"BTC/USD": 0.001, "ETH/USD": 0.01}
 STOP_LOSS_PCT = 0.01
 TAKE_PROFIT_PCT = 0.02
 
@@ -63,7 +49,6 @@ async def handle_trade(trade):
 
     buf = bars_buffer.get(key)
     if buf is None:
-        # New bar
         buf = {
             "open": price,
             "high": price,
@@ -75,7 +60,6 @@ async def handle_trade(trade):
         }
         bars_buffer[key] = buf
     else:
-        # Update existing bar
         buf["high"] = max(buf["high"], price)
         buf["low"] = min(buf["low"], price)
         buf["close"] = price
@@ -93,9 +77,7 @@ async def flush_old_bars(symbol, current_minute):
 
         rsi = compute_rsi_from_deque(close_history[symbol], RSI_PERIOD)
 
-        print(f"[{buf['minute'].isoformat()}] {symbol} O:{buf['open']:.2f} "
-              f"H:{buf['high']:.2f} L:{buf['low']:.2f} C:{buf['close']:.2f} "
-              f"RSI:{rsi if rsi is not None else 'n/a'}")
+        print(f"[{buf['minute'].isoformat()}] {symbol} O:{buf['open']:.2f} H:{buf['high']:.2f} L:{buf['low']:.2f} C:{buf['close']:.2f} RSI:{rsi if rsi is not None else 'n/a'}")
 
         if rsi is None:
             continue
@@ -141,26 +123,23 @@ async def flush_old_bars(symbol, current_minute):
 
 async def main():
     stream = CryptoDataStream(API_KEY, API_SECRET)
-
     for sym in SYMBOLS:
         stream.subscribe_trades(handle_trade, sym)
-
     print("Starting real-time crypto scalper stream... (Ctrl+C to stop)")
+    # Use run_async here instead of run
     await stream.run_async()
 
 
 if __name__ == "__main__":
+    # Safely run main() even if there's an existing event loop
     try:
         loop = asyncio.get_running_loop()
     except RuntimeError:
         loop = None
 
     if loop and loop.is_running():
-        # Already running event loop, create a task instead
         loop.create_task(main())
-        # Keep script alive
         import time
-        print("Event loop already running — launched main() as task")
         while True:
             time.sleep(1)
     else:
