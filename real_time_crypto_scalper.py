@@ -138,28 +138,16 @@ async def flush_old_bars(symbol, current_minute):
         except Exception as e:
             print(f"Order submission failed: {e}")
 
-
 async def main():
     stream = CryptoDataStream(API_KEY, API_SECRET)
 
-    # Subscribe to trade updates for each symbol
     for sym in SYMBOLS:
         stream.subscribe_trades(handle_trade, sym)
 
     print("Starting real-time crypto scalper stream... (Ctrl+C to stop)")
-    await stream.run()
-
-
+    # This avoids nested asyncio.run()
+    await stream._run_forever()
 
 
 if __name__ == "__main__":
-    try:
-        loop = asyncio.get_running_loop()
-    except RuntimeError:
-        loop = None
-
-    if loop and loop.is_running():
-        # If already running (e.g., in Jupyter or CI)
-        loop.create_task(main())
-    else:
-        asyncio.run(main())
+    asyncio.run(main())
