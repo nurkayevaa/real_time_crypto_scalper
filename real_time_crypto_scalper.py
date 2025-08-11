@@ -150,8 +150,16 @@ async def main():
     await stream.run()
 
 
+
+
 if __name__ == "__main__":
     try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        loop = None
+
+    if loop and loop.is_running():
+        # If already running (e.g., in Jupyter or CI)
+        loop.create_task(main())
+    else:
         asyncio.run(main())
-    except KeyboardInterrupt:
-        print("Stopped by user")
