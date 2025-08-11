@@ -146,7 +146,8 @@ async def main():
 
     print("Starting real-time crypto scalper stream... (Ctrl+C to stop)")
     # This avoids nested asyncio.run()
-    await stream._run_forever()
+    await stream.run_async()
+
 
 
 if __name__ == "__main__":
