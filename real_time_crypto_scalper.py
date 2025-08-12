@@ -6,17 +6,16 @@ Synchronous WebSocket scalper for Alpaca (paper).
 - Maintains an in-memory 1-min bar buffer (pandas DataFrame)
 - Computes RSI(14) and MA(20)
 - Submits bracket market orders (entry + stop loss + take profit) on signals
-- Avoids nested asyncio by running stream.run() inside a thread
+- Avoids nested asyncio by running stream.run() inside a thread with its own event loop
 """
 
 import os
 import time
 import threading
 from decimal import Decimal, ROUND_DOWN
-from collections import deque, defaultdict
+from collections import defaultdict
 
 import pandas as pd
-import numpy as np
 import ta
 
 from alpaca.data.live import CryptoDataStream
@@ -171,36 +170,35 @@ def on_bars(bar):
     bar : object with fields like .timestamp, .close, ...
     """
     global bars_df
-    # Convert timestamp to ISO or keep as-is
     ts = getattr(bar, "timestamp", None)
-    close = float(getattr(bar, "close", float(getattr(bar, "c", 0.0))))  # adapt to property name
+    close = float(getattr(bar, "close", float(getattr(bar, "c", 0.0))))
 
     new_row = {"timestamp": ts, "close": close}
     bars_df = pd.concat([bars_df, pd.DataFrame([new_row])], ignore_index=True).tail(MAX_BARS)
-    # Ensure index is continuous
     bars_df.reset_index(drop=True, inplace=True)
 
-    # After appending, check signals synchronously
     try:
         check_and_maybe_trade(SYMBOL)
     except Exception as e:
         print("Signal handling error:", e)
 
-# --------- Stream thread ---------
+# --------- Stream thread with own asyncio loop ---------
 def stream_thread():
-    """
-    Start CryptoDataStream in this thread. This will block until stopped.
-    """
-    stream = CryptoDataStream(API_KEY, API_SECRET)
+    import asyncio
 
-    # subscribe to 1-min bars for the SYMBOL
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+
+    stream = CryptoDataStream(API_KEY, API_SECRET)
     stream.subscribe_bars(on_bars, SYMBOL)
 
-    print("Starting CryptoDataStream (blocking call in thread)...")
+    print("Starting CryptoDataStream (asyncio loop in thread)...")
     try:
-        stream.run()  # blocking
+        loop.run_until_complete(stream.run())
     except Exception as e:
         print("Stream stopped with exception:", e)
+    finally:
+        loop.close()
 
 # --------- Main ---------
 def main():
@@ -217,7 +215,6 @@ def main():
             time.sleep(1)
     except KeyboardInterrupt:
         print("Stopping... (Ctrl+C)")
-        # CryptoDataStream has no direct stop() exposed synchronously; process will exit as thread is daemon
         print("Exiting.")
 
 if __name__ == "__main__":
