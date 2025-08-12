@@ -1,105 +1,94 @@
-#!/usr/bin/env python3
-"""
-Synchronous WebSocket scalper for Alpaca (paper). 
-
-- Streams 1-min crypto bars via CryptoDataStream in a background thread
-- Maintains an in-memory 1-min bar buffer (pandas DataFrame)
-- Computes RSI(14) and MA(20)
-- Submits bracket market orders (entry + stop loss + take profit) on signals
-- Avoids nested asyncio by running stream.run() inside a thread with its own event loop
-"""
-
 import os
-import time
-import threading
-from decimal import Decimal, ROUND_DOWN
-from collections import defaultdict
+import asyncio
+from datetime import datetime, timedelta
+from collections import deque
 
 import pandas as pd
 import ta
+from decimal import Decimal, ROUND_DOWN
 
-from alpaca.data.live import CryptoDataStream
+from alpaca.data.historical.crypto import CryptoHistoricalDataClient
+from alpaca.data.requests import CryptoBarsRequest
+from alpaca.data.timeframe import TimeFrame
 from alpaca.trading.client import TradingClient
 from alpaca.trading.requests import MarketOrderRequest
 from alpaca.trading.enums import OrderSide, TimeInForce
 
-# ---------------- CONFIG ----------------
+
 API_KEY = os.getenv("APCA_API_KEY_ID")
 API_SECRET = os.getenv("APCA_API_SECRET_KEY")
 
-# Watchlist / symbol
-SYMBOL = "BTC/USD"
-
-# Indicators
-RSI_PERIOD = 14
-MA_PERIOD = 20
-
-# Order sizing
-ORDER_QTY = 0.001  # fractional crypto size (example)
-# Risk management
-STOP_LOSS_PCT = 0.01   # 1%
-TAKE_PROFIT_PCT = 0.02 # 2%
-
-# Keep this many 1-min closes for indicators (should be >= MA period & RSI period)
-MAX_BARS = 500
-
-# ----------------------------------------
-
-# Alpaca trading client (sync)
+# Alpaca clients
+data_client = CryptoHistoricalDataClient()  # No API keys required
 trading_client = TradingClient(API_KEY, API_SECRET, paper=True)
 
-# In-memory bar storage (timestamp, close) as pandas DataFrame
-bars_df = pd.DataFrame(columns=["timestamp", "close"])
+SYMBOLS = ["BTC/USD", "ETH/USD"]
+ORDER_QTY = {
+    "BTC/USD": 0.001,
+    "ETH/USD": 0.01,
+}
 
-# Simple in-memory cooldown/position tracking
-last_order_time = defaultdict(lambda: 0.0)   # symbol -> timestamp of last order
-cooldown_seconds = 30.0                      # don't place more than one order per symbol this often
+RSI_PERIOD = 14
+SMA_50 = 50
+SMA_200 = 200
+BUY_THRESHOLD = 30.0
+SELL_THRESHOLD = 70.0
 
-# --------- Helpers ---------
+STOP_LOSS_PCT = 0.01
+TAKE_PROFIT_PCT = 0.02
+
+# Store close prices per symbol for indicator calculation
+close_prices = {sym: deque(maxlen=5000) for sym in SYMBOLS}
+
+
 def round_price(price, decimals=4):
     d = Decimal(str(price))
-    return float(d.quantize(Decimal('1.' + '0' * decimals), rounding=ROUND_DOWN))
+    return float(d.quantize(Decimal("1." + "0" * decimals), rounding=ROUND_DOWN))
 
-def compute_rsi_from_series(series: pd.Series, period: int = 14):
-    if len(series) < period + 1:
+
+async def fetch_latest_bar(symbol: str):
+    now = datetime.utcnow()
+    start = now - timedelta(minutes=10)  # get recent bars, buffer for safety
+    request_params = CryptoBarsRequest(
+        symbol_or_symbols=symbol,
+        timeframe=TimeFrame.Minute,
+        start=start,
+        end=now,
+        limit=100,
+    )
+    bars = data_client.get_crypto_bars(request_params)
+    df = bars.df
+    if symbol in df.index.get_level_values(0):
+        symbol_df = df.loc[symbol].copy()
+        return symbol_df
+    else:
         return None
-    return ta.momentum.RSIIndicator(series, window=period).rsi().iloc[-1]
 
-def compute_ma_from_series(series: pd.Series, period: int = 20):
-    if len(series) < period:
-        return None
-    return series.rolling(window=period).mean().iloc[-1]
 
-def has_open_position(symbol: str) -> bool:
-    """
-    Returns True if there's an open position for the symbol.
-    Uses TradingClient.get_all_positions to avoid exceptions.
-    """
-    try:
-        positions = trading_client.get_all_positions()
-        for p in positions:
-            # positions come as objects with .symbol property
-            if getattr(p, "symbol", None) == symbol.replace("/", "") or getattr(p, "symbol", None) == symbol:
-                return True
-    except Exception as e:
-        print("Warning: get_all_positions failed:", e)
-    return False
+async def compute_indicators(symbol: str, df: pd.DataFrame):
+    close_series = df["close"]
+    close_prices[symbol].extend(close_series.values)
 
-def place_bracket_order(symbol: str, qty: float, side: OrderSide, entry_price: float):
-    """
-    Submits a market bracket order with SL and TP (paper trading).
-    side: OrderSide.BUY or OrderSide.SELL
-    entry_price: last close used to calculate SL/TP levels
-    """
-    stop_loss_pct = STOP_LOSS_PCT
-    take_profit_pct = TAKE_PROFIT_PCT
+    # Use latest close_prices deque for indicators
+    close_list = list(close_prices[symbol])
+    if len(close_list) < max(RSI_PERIOD, SMA_200):
+        return None, None, None
 
+    s = pd.Series(close_list)
+    rsi = ta.momentum.RSIIndicator(s, window=RSI_PERIOD).rsi().iloc[-1]
+    sma50 = s.rolling(SMA_50).mean().iloc[-1]
+    sma200 = s.rolling(SMA_200).mean().iloc[-1]
+
+    return rsi, sma50, sma200
+
+
+async def place_bracket_order(symbol: str, qty: float, side: OrderSide, price: float):
     if side == OrderSide.BUY:
-        sl_price = round_price(entry_price * (1 - stop_loss_pct))
-        tp_price = round_price(entry_price * (1 + take_profit_pct))
-    else:  # SELL
-        sl_price = round_price(entry_price * (1 + stop_loss_pct))
-        tp_price = round_price(entry_price * (1 - take_profit_pct))
+        sl_price = round_price(price * (1 - STOP_LOSS_PCT))
+        tp_price = round_price(price * (1 + TAKE_PROFIT_PCT))
+    else:
+        sl_price = round_price(price * (1 + STOP_LOSS_PCT))
+        tp_price = round_price(price * (1 - TAKE_PROFIT_PCT))
 
     order = MarketOrderRequest(
         symbol=symbol,
@@ -111,111 +100,48 @@ def place_bracket_order(symbol: str, qty: float, side: OrderSide, entry_price: f
         stop_loss=dict(stop_price=str(sl_price)),
     )
     try:
-        resp = trading_client.submit_order(order)
-        print(f"Submitted {side} bracket order for {symbol} qty={qty} entry={entry_price:.2f} sl={sl_price} tp={tp_price}")
-        return resp
+        order_response = trading_client.submit_order(order)
+        print(f"Order submitted successfully: ID {order_response.id}, status {order_response.status}")
     except Exception as e:
-        print("Order submission failed:", e)
-        return None
+        print(f"Order submission failed: {e}")
 
-# --------- Signal logic ---------
-def check_and_maybe_trade(symbol: str):
-    """
-    Calculate RSI and MA from the current bars_df and decide buys/sells.
-    """
-    global bars_df, last_order_time
+async def main_loop():
+    print("Starting async REST polling crypto scalper...")
+    while True:
+        for symbol in SYMBOLS:
+            df = await fetch_latest_bar(symbol)
+            if df is None or df.empty:
+                print(f"No bars received for {symbol}")
+                continue
 
-    if bars_df.empty:
-        return
+            rsi, sma50, sma200 = await compute_indicators(symbol, df)
+            if rsi is None:
+                print(f"Not enough data for indicators for {symbol}")
+                continue
 
-    closes = bars_df["close"].astype(float)
-    rsi = compute_rsi_from_series(closes, RSI_PERIOD)
-    ma = compute_ma_from_series(closes, MA_PERIOD)
-    last_price = float(closes.iloc[-1])
+            last_close = df["close"].iloc[-1]
+            qty = ORDER_QTY.get(symbol, 0.001)
 
-    if rsi is None or ma is None:
-        # not enough data
-        return
+            print(
+                f"{datetime.utcnow().isoformat()} {symbol} Close={last_close:.2f} "
+                f"RSI={rsi:.2f} SMA50={sma50:.2f} SMA200={sma200:.2f}"
+            )
 
-    print(f"[{bars_df['timestamp'].iloc[-1]}] {symbol} price={last_price:.2f} RSI={rsi:.2f} MA={ma:.2f}")
+            # Trading logic
+            if rsi < BUY_THRESHOLD and sma50 > sma200:
+                print(f"BUY signal for {symbol}")
+                await place_bracket_order(symbol, qty, OrderSide.BUY, last_close)
+            elif rsi > SELL_THRESHOLD and sma50 < sma200:
+                print(f"SELL signal for {symbol}")
+                await place_bracket_order(symbol, qty, OrderSide.SELL, last_close)
+            else:
+                print(f"No trade signal for {symbol}")
 
-    # simple cooldown check
-    now_ts = time.time()
-    if now_ts - last_order_time[symbol] < cooldown_seconds:
-        # recently placed an order for this symbol -> skip
-        return
+        # Sleep until next minute (approx)
+        now = datetime.utcnow()
+        seconds_to_next_min = 60 - now.second
+        await asyncio.sleep(seconds_to_next_min)
 
-    # only place orders if no existing position
-    if rsi < 30.0 and last_price > ma:
-        if not has_open_position(symbol):
-            print("Signal -> BUY")
-            resp = place_bracket_order(symbol, ORDER_QTY, OrderSide.BUY, last_price)
-            if resp is not None:
-                last_order_time[symbol] = now_ts
-        else:
-            print("Buy signal but already have an open position; skipping.")
-    elif rsi > 70.0 and last_price < ma:
-        if not has_open_position(symbol):
-            print("Signal -> SELL")
-            resp = place_bracket_order(symbol, ORDER_QTY, OrderSide.SELL, last_price)
-            if resp is not None:
-                last_order_time[symbol] = now_ts
-        else:
-            print("Sell signal but already have an open position; skipping.")
-
-# --------- WebSocket handler (synchronous-friendly) ---------
-def on_bars(bar):
-    """
-    Called by CryptoDataStream subscriber when a new 1-min bar arrives.
-    bar : object with fields like .timestamp, .close, ...
-    """
-    global bars_df
-    ts = getattr(bar, "timestamp", None)
-    close = float(getattr(bar, "close", float(getattr(bar, "c", 0.0))))
-
-    new_row = {"timestamp": ts, "close": close}
-    bars_df = pd.concat([bars_df, pd.DataFrame([new_row])], ignore_index=True).tail(MAX_BARS)
-    bars_df.reset_index(drop=True, inplace=True)
-
-    try:
-        check_and_maybe_trade(SYMBOL)
-    except Exception as e:
-        print("Signal handling error:", e)
-
-# --------- Stream thread with own asyncio loop ---------
-def stream_thread():
-    import asyncio
-
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
-
-    stream = CryptoDataStream(API_KEY, API_SECRET)
-    stream.subscribe_bars(on_bars, SYMBOL)
-
-    print("Starting CryptoDataStream (asyncio loop in thread)...")
-    try:
-        loop.run_until_complete(stream.run())
-    except Exception as e:
-        print("Stream stopped with exception:", e)
-    finally:
-        loop.close()
-
-# --------- Main ---------
-def main():
-    if not API_KEY or not API_SECRET:
-        print("Please set APCA_API_KEY_ID and APCA_API_SECRET_KEY environment variables.")
-        return
-
-    print("Launching stream thread...")
-    t = threading.Thread(target=stream_thread, daemon=True)
-    t.start()
-
-    try:
-        while True:
-            time.sleep(1)
-    except KeyboardInterrupt:
-        print("Stopping... (Ctrl+C)")
-        print("Exiting.")
 
 if __name__ == "__main__":
-    main()
+    asyncio.run(main_loop())
