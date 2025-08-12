@@ -1,147 +1,118 @@
 import os
-import asyncio
-from datetime import datetime, timedelta
+import time
+from datetime import datetime
 from collections import deque
+from decimal import Decimal, ROUND_DOWN
 
 import pandas as pd
 import ta
-from decimal import Decimal, ROUND_DOWN
 
 from alpaca.data.historical.crypto import CryptoHistoricalDataClient
-from alpaca.data.requests import CryptoBarsRequest
-from alpaca.data.timeframe import TimeFrame
 from alpaca.trading.client import TradingClient
 from alpaca.trading.requests import MarketOrderRequest
 from alpaca.trading.enums import OrderSide, TimeInForce
 
-
 API_KEY = os.getenv("APCA_API_KEY_ID")
 API_SECRET = os.getenv("APCA_API_SECRET_KEY")
 
-# Alpaca clients
-data_client = CryptoHistoricalDataClient()  # No API keys required
+# Initialize clients
+data_client = CryptoHistoricalDataClient()  # no keys needed for historical data
 trading_client = TradingClient(API_KEY, API_SECRET, paper=True)
 
 SYMBOLS = ["BTC/USD", "ETH/USD"]
+
+RSI_PERIOD = 14
+MA_SHORT = 50
+MA_LONG = 200
+BUY_RSI_THRESHOLD = 30.0
+SELL_RSI_THRESHOLD = 70.0
+
 ORDER_QTY = {
     "BTC/USD": 0.001,
     "ETH/USD": 0.01,
 }
 
-RSI_PERIOD = 14
-SMA_50 = 50
-SMA_200 = 200
-BUY_THRESHOLD = 30.0
-SELL_THRESHOLD = 70.0
-
 STOP_LOSS_PCT = 0.01
 TAKE_PROFIT_PCT = 0.02
 
-# Store close prices per symbol for indicator calculation
-close_prices = {sym: deque(maxlen=5000) for sym in SYMBOLS}
-
+# Store prices in memory for indicators
+price_history = {symbol: deque(maxlen=5000) for symbol in SYMBOLS}
 
 def round_price(price, decimals=4):
     d = Decimal(str(price))
-    return float(d.quantize(Decimal("1." + "0" * decimals), rounding=ROUND_DOWN))
+    return float(d.quantize(Decimal('1.' + '0' * decimals), rounding=ROUND_DOWN))
 
-
-async def fetch_latest_bar(symbol: str):
-    now = datetime.utcnow()
-    start = now - timedelta(minutes=10)  # get recent bars, buffer for safety
-    request_params = CryptoBarsRequest(
-        symbol_or_symbols=symbol,
-        timeframe=TimeFrame.Minute,
-        start=start,
-        end=now,
-        limit=100,
-    )
-    bars = data_client.get_crypto_bars(request_params)
-    df = bars.df
-    if symbol in df.index.get_level_values(0):
-        symbol_df = df.loc[symbol].copy()
-        return symbol_df
-    else:
-        return None
-
-
-async def compute_indicators(symbol: str, df: pd.DataFrame):
-    close_series = df["close"]
-    close_prices[symbol].extend(close_series.values)
-
-    # Use latest close_prices deque for indicators
-    close_list = list(close_prices[symbol])
-    if len(close_list) < max(RSI_PERIOD, SMA_200):
-        return None, None, None
-
-    s = pd.Series(close_list)
+def calculate_indicators(prices_deque):
+    if len(prices_deque) < MA_LONG:
+        return None, None, None  # not enough data yet
+    s = pd.Series(list(prices_deque))
     rsi = ta.momentum.RSIIndicator(s, window=RSI_PERIOD).rsi().iloc[-1]
-    sma50 = s.rolling(SMA_50).mean().iloc[-1]
-    sma200 = s.rolling(SMA_200).mean().iloc[-1]
+    sma_short = s.rolling(MA_SHORT).mean().iloc[-1]
+    sma_long = s.rolling(MA_LONG).mean().iloc[-1]
+    return rsi, sma_short, sma_long
 
-    return rsi, sma50, sma200
-
-
-async def place_bracket_order(symbol: str, qty: float, side: OrderSide, price: float):
-    if side == OrderSide.BUY:
-        sl_price = round_price(price * (1 - STOP_LOSS_PCT))
-        tp_price = round_price(price * (1 + TAKE_PROFIT_PCT))
-    else:
-        sl_price = round_price(price * (1 + STOP_LOSS_PCT))
-        tp_price = round_price(price * (1 - TAKE_PROFIT_PCT))
-
-    order = MarketOrderRequest(
-        symbol=symbol,
-        qty=qty,
-        side=side,
-        time_in_force=TimeInForce.GTC,
-        order_class="bracket",
-        take_profit=dict(limit_price=str(tp_price)),
-        stop_loss=dict(stop_price=str(sl_price)),
-    )
+def place_order(symbol, side, qty, close_price):
     try:
-        order_response = trading_client.submit_order(order)
-        print(f"Order submitted successfully: ID {order_response.id}, status {order_response.status}")
+        sl_price = round_price(close_price * (1 - STOP_LOSS_PCT)) if side == OrderSide.BUY else round_price(close_price * (1 + STOP_LOSS_PCT))
+        tp_price = round_price(close_price * (1 + TAKE_PROFIT_PCT)) if side == OrderSide.BUY else round_price(close_price * (1 - TAKE_PROFIT_PCT))
+
+        order = MarketOrderRequest(
+            symbol=symbol,
+            qty=qty,
+            side=side,
+            time_in_force=TimeInForce.GTC,
+            order_class="bracket",
+            take_profit=dict(limit_price=str(tp_price)),
+            stop_loss=dict(stop_price=str(sl_price)),
+        )
+        resp = trading_client.submit_order(order)
+        print(f"Order placed: {side} {qty} {symbol} | TP: {tp_price} | SL: {sl_price} | Order ID: {resp.id}")
     except Exception as e:
         print(f"Order submission failed: {e}")
 
-async def main_loop():
-    print("Starting async REST polling crypto scalper...")
+def main_loop():
+    print("Starting synchronous crypto scalper...")
+
     while True:
         for symbol in SYMBOLS:
-            df = await fetch_latest_bar(symbol)
-            if df is None or df.empty:
-                print(f"No bars received for {symbol}")
-                continue
+            try:
+                # Fetch latest 1-min bars - can adjust timeframe or limit as needed
+                bars = data_client.get_crypto_bars(
+                    symbol_or_symbols=symbol,
+                    timeframe="1Min",
+                    limit=MA_LONG + 10  # get enough bars for MA calculations
+                )
+                df = bars.df
+                if symbol not in df.index.get_level_values(0):
+                    print(f"No data for {symbol}")
+                    continue
+                df_symbol = df.loc[symbol]
+                closes = df_symbol['close'].tolist()
+                price_history[symbol].extend(closes)
 
-            rsi, sma50, sma200 = await compute_indicators(symbol, df)
-            if rsi is None:
-                print(f"Not enough data for indicators for {symbol}")
-                continue
+                rsi, sma_short, sma_long = calculate_indicators(price_history[symbol])
+                if rsi is None:
+                    print(f"Not enough data for indicators on {symbol}")
+                    continue
 
-            last_close = df["close"].iloc[-1]
-            qty = ORDER_QTY.get(symbol, 0.001)
+                latest_close = price_history[symbol][-1]
 
-            print(
-                f"{datetime.utcnow().isoformat()} {symbol} Close={last_close:.2f} "
-                f"RSI={rsi:.2f} SMA50={sma50:.2f} SMA200={sma200:.2f}"
-            )
+                print(f"{datetime.now().isoformat()} - {symbol} | Close: {latest_close:.2f} | RSI: {rsi:.2f} | SMA{MA_SHORT}: {sma_short:.2f} | SMA{MA_LONG}: {sma_long:.2f}")
 
-            # Trading logic
-            if rsi < BUY_THRESHOLD and sma50 > sma200:
-                print(f"BUY signal for {symbol}")
-                await place_bracket_order(symbol, qty, OrderSide.BUY, last_close)
-            elif rsi > SELL_THRESHOLD and sma50 < sma200:
-                print(f"SELL signal for {symbol}")
-                await place_bracket_order(symbol, qty, OrderSide.SELL, last_close)
-            else:
-                print(f"No trade signal for {symbol}")
+                qty = ORDER_QTY.get(symbol, 0.001)
 
-        # Sleep until next minute (approx)
-        now = datetime.utcnow()
-        seconds_to_next_min = 60 - now.second
-        await asyncio.sleep(seconds_to_next_min)
+                # Trading logic
+                if rsi < BUY_RSI_THRESHOLD and sma_short > sma_long:
+                    place_order(symbol, OrderSide.BUY, qty, latest_close)
+                elif rsi > SELL_RSI_THRESHOLD and sma_short < sma_long:
+                    place_order(symbol, OrderSide.SELL, qty, latest_close)
+                else:
+                    print("No trade signal.")
 
+            except Exception as e:
+                print(f"Error processing {symbol}: {e}")
+
+        time.sleep(60)  # wait 1 min before next check
 
 if __name__ == "__main__":
-    asyncio.run(main_loop())
+    main_loop()
