@@ -1,7 +1,10 @@
-name: Alpaca RSI+MA Bot (Real-Time Crypto Scalper)
+name: Alpaca Multi-Coin RSI+MA Bot
 
 on:
-  workflow_dispatch:
+  schedule:
+    # Every 5 minutes
+    - cron: "*/5 * * * *"
+  workflow_dispatch:  # allows manual run from GitHub
 
 jobs:
   run-bot:
@@ -16,16 +19,10 @@ jobs:
           python-version: '3.10'
 
       - name: Install dependencies
-        run: |
-          pip install --upgrade pip
-          pip install -r requirements.txt
+        run: pip install -r requirements.txt
 
-      - name: Run real-time crypto scalper bot
+      - name: Run bot
         env:
           APCA_API_KEY_ID: ${{ secrets.APCA_API_KEY_ID }}
           APCA_API_SECRET_KEY: ${{ secrets.APCA_API_SECRET_KEY }}
-          RSI_PERIOD: 14
-          BUY_THRESHOLD: 30
-          SELL_THRESHOLD: 70
-          COOLDOWN_SECONDS: 60
-        run: python real_time_crypto_scalper.py
+        run: python main.py
