@@ -18,7 +18,10 @@ API_SECRET = os.getenv("APCA_API_SECRET_KEY")
 data_client = CryptoHistoricalDataClient()
 trading_client = TradingClient(API_KEY, API_SECRET, paper=True)
 
-symbols = [ "BTC/USD", "ETH/USD", "SOL/USD", "LTC/USD", "DOGE/USD", "ADA/USD", "AVAX/USD", "BNB/USD"]
+symbols = [
+    "BTC/USD", "ETH/USD", "SOL/USD", "LTC/USD",
+    "DOGE/USD", "ADA/USD", "AVAX/USD", "BNB/USD"
+]
 
 def fetch_data(symbol, days=30):
     end_time = datetime.utcnow()
@@ -30,16 +33,15 @@ def fetch_data(symbol, days=30):
         end=end_time
     )
     bars = data_client.get_crypto_bars(request_params).df
-    
-    # Some versions return a multi-index, some return a 'symbol' column
+
+    # Filter correctly whether symbol is a column or multi-index
     if 'symbol' in bars.columns:
         bars = bars[bars['symbol'] == symbol]
     else:
-        # if multi-index, reset and filter
         bars = bars.reset_index()
         if 'symbol' in bars.columns:
             bars = bars[bars['symbol'] == symbol]
-    
+
     return bars.reset_index(drop=True)
 
 def backtest(df, rsi_period, ma_period, rsi_buy, rsi_sell):
