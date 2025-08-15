@@ -1,10 +1,9 @@
-name: Alpaca Multi-Coin RSI+MA Bot
+name: Multi-Coin Crypto Scalper
 
 on:
+  workflow_dispatch:  # manual trigger
   schedule:
-    # Every 5 minutes
-    - cron: "*/5 * * * *"
-  workflow_dispatch:  # allows manual run from GitHub
+    - cron: "*/5 * * * *"  # every 5 minutes
 
 jobs:
   run-bot:
@@ -21,7 +20,7 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements.txt
 
-      - name: Run bot
+      - name: Run scalper
         env:
           APCA_API_KEY_ID: ${{ secrets.APCA_API_KEY_ID }}
           APCA_API_SECRET_KEY: ${{ secrets.APCA_API_SECRET_KEY }}
