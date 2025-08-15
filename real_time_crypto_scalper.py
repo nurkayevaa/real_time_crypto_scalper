@@ -30,7 +30,16 @@ def fetch_data(symbol, days=30):
         end=end_time
     )
     bars = data_client.get_crypto_bars(request_params).df
-    bars = bars[bars.index.get_level_values('symbol') == symbol]
+    
+    # Some versions return a multi-index, some return a 'symbol' column
+    if 'symbol' in bars.columns:
+        bars = bars[bars['symbol'] == symbol]
+    else:
+        # if multi-index, reset and filter
+        bars = bars.reset_index()
+        if 'symbol' in bars.columns:
+            bars = bars[bars['symbol'] == symbol]
+    
     return bars.reset_index(drop=True)
 
 def backtest(df, rsi_period, ma_period, rsi_buy, rsi_sell):
