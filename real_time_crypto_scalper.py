@@ -18,7 +18,7 @@ API_SECRET = os.getenv("APCA_API_SECRET_KEY")
 data_client = CryptoHistoricalDataClient()
 trading_client = TradingClient(API_KEY, API_SECRET, paper=True)
 
-SYMBOLS = [ "BTC/USD", "ETH/USD", "SOL/USD", "LTC/USD", "DOGE/USD", "ADA/USD", "AVAX/USD", "BNB/USD"]
+simbols = [ "BTC/USD", "ETH/USD", "SOL/USD", "LTC/USD", "DOGE/USD", "ADA/USD", "AVAX/USD", "BNB/USD"]
 
 def fetch_data(symbol, days=30):
     end_time = datetime.utcnow()
