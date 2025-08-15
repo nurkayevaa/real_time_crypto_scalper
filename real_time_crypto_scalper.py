@@ -18,10 +18,8 @@ API_SECRET = os.getenv("APCA_API_SECRET_KEY")
 data_client = CryptoHistoricalDataClient()
 trading_client = TradingClient(API_KEY, API_SECRET, paper=True)
 
-symbols = [
-    "BTC/USD", "ETH/USD", "SOL/USD", "LTC/USD",
-    "DOGE/USD", "ADA/USD", "AVAX/USD", "BNB/USD"
-]
+symbols = ["BTC/USD", "ETH/USD", "SOL/USD", "LTC/USD",
+           "DOGE/USD", "ADA/USD", "AVAX/USD", "BNB/USD"]
 
 def fetch_data(symbol, days=30):
     end_time = datetime.utcnow()
@@ -34,13 +32,13 @@ def fetch_data(symbol, days=30):
     )
     bars = data_client.get_crypto_bars(request_params).df
 
-    # Filter correctly whether symbol is a column or multi-index
+    # Ensure symbol is a column
+    bars = bars.reset_index()
+
     if 'symbol' in bars.columns:
         bars = bars[bars['symbol'] == symbol]
     else:
-        bars = bars.reset_index()
-        if 'symbol' in bars.columns:
-            bars = bars[bars['symbol'] == symbol]
+        return pd.DataFrame()
 
     return bars.reset_index(drop=True)
 
@@ -112,7 +110,7 @@ def place_order(symbol, side, qty=0.001):
 def run_bot():
     coin_params = {}
     
-    # Find best params for each coin
+    # Step 1: Find best params for each coin
     for symbol in symbols:
         df = fetch_data(symbol)
         if df.empty:
@@ -122,10 +120,10 @@ def run_bot():
         coin_params[symbol] = best_params
         print(f"{symbol} best params: {best_params}")
     
-    # Live trading step
+    # Step 2: Live trading step
     for symbol, params in coin_params.items():
         df = fetch_data(symbol, days=1)
-        if len(df) < max(params['rsi_period'], params['ma_period']):
+        if df.empty or len(df) < max(params['rsi_period'], params['ma_period']):
             continue
         signal = apply_strategy(df, params)
         if signal:
